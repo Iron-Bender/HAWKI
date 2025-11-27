@@ -21,6 +21,14 @@
                 </button>
                 @endif
 
+                <button id="translate-sb-btn" onclick="onSidebarButtonDown('translate')" class="btn-sm sidebar-btn tooltip-parent">
+                    <x-icon name="translate-icon"/>
+
+                    <div class="label tooltip tt-abs-left">
+                        {{ $translation["Translate"] ?? "Translate" }}
+                    </div>
+                </button>
+
                 <button id="profile-sb-btn" onclick="onSidebarButtonDown('profile')" class="btn-sm sidebar-btn tooltip-parent">
                     <div class="profile-icon round-icon">
                         <span class="user-inits" style="display:none"></span>

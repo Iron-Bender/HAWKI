@@ -11,6 +11,7 @@ use App\Http\Controllers\LoginController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\RoomController;
 use App\Http\Controllers\StreamController;
+use App\Http\Controllers\TranslateController;
 use Illuminate\Support\Facades\Route;
 
 Route::middleware('prevent_back')->group(function () {
@@ -67,6 +68,9 @@ Route::middleware('prevent_back')->group(function () {
     });
 
     Route::get('/check-session', [HomeController::class, 'CheckSessionTimeout']);
+
+    // Translate routes
+    Route::get('/translate', [TranslateController::class, 'index']);
 
     // Announcement routes
     Route::get('/req/announcement/render/{id}', [AnnouncementController::class, 'render']);
