@@ -1,5 +1,4 @@
 import { Utils } from './Utils.js';
-import { CustomAudioPlayer } from './CustomAudioPlayer.js?v=1.0.14';
 
 export class TranscriptUI {
     constructor(app) {
@@ -9,8 +8,6 @@ export class TranscriptUI {
         this.currentAudioPlaceholder = null;
         this.audioUpdateHandler = null;
         this.pollingJobs = new Set();
-        this.sidebarPlayers = new Map();
-        this.activeSnippetPlayer = null;
     }
 
     initEventListeners() {
@@ -81,6 +78,33 @@ export class TranscriptUI {
             transcribeBtn.addEventListener('click', () => this.startTranscription());
         }
 
+
+        const liveFontSizeSlider = document.getElementById('live-font-size-slider');
+        if (liveFontSizeSlider) {
+            liveFontSizeSlider.addEventListener('input', (event) => {
+                const nextSize = Number(event.target.value);
+                if (Number.isNaN(nextSize)) return;
+                this.app.state.liveTranscriptFontSize = nextSize;
+                this.applyLiveTranscriptAppearance();
+            });
+        }
+
+        const liveContrastToggle = document.getElementById('live-contrast-toggle');
+        if (liveContrastToggle) {
+            liveContrastToggle.addEventListener('click', () => {
+                this.app.state.liveTranscriptContrastInverted = !this.app.state.liveTranscriptContrastInverted;
+                this.applyLiveTranscriptAppearance();
+            });
+        }
+
+        const liveMaximizeToggle = document.getElementById('live-transcript-maximize-toggle');
+        if (liveMaximizeToggle) {
+            liveMaximizeToggle.addEventListener('click', () => {
+                this.app.state.liveTranscriptMaximized = !this.app.state.liveTranscriptMaximized;
+                this.applyLiveTranscriptAppearance();
+            });
+        }
+
         const settingsMenuTrigger = document.getElementById('settings-menu-trigger');
         if (settingsMenuTrigger) {
             settingsMenuTrigger.addEventListener('click', (e) => {
@@ -130,43 +154,6 @@ export class TranscriptUI {
             containers.forEach(container => container.classList.remove('selection-locked'));
         });
 
-        // Jump playhead or play/pause when clicking on a speaker avatar
-        document.addEventListener('click', async (e) => {
-            const avatar = e.target.closest('.speaker-avatar');
-            if (avatar && (avatar.closest('#transcription-result') || avatar.closest('#transcription-result-container-edit'))) {
-                const segment = avatar.closest('.transcript-segment');
-                if (segment && this.app.globalAudioPlayer) {
-                    const blockIdx = parseInt(segment.dataset.blockIdx, 10);
-                    if (!isNaN(blockIdx) && this.app.globalAudioPlayer.segments) {
-                        const seg = this.app.globalAudioPlayer.segments[blockIdx];
-                        if (seg) {
-                            if (this.app.state.editModeActive) {
-                                const isCurrentSegment = this.app.globalAudioPlayer.playRange && 
-                                                         this.app.globalAudioPlayer.playRange.start === seg.start && 
-                                                         this.app.globalAudioPlayer.playRange.end === seg.end;
-                                
-                                if (isCurrentSegment && this.app.globalAudioPlayer.isPlaying) {
-                                    this.app.globalAudioPlayer.pause();
-                                } else {
-                                    await this.app.globalAudioPlayer.seek(seg.start);
-                                    await this.app.globalAudioPlayer.play();
-                                }
-                            } else {
-                                const currentGlobalTime = this.app.globalAudioPlayer.getGlobalTime();
-                                const isCurrentSegment = currentGlobalTime >= seg.start && currentGlobalTime <= seg.end;
-                                if (isCurrentSegment && this.app.globalAudioPlayer.isPlaying) {
-                                    this.app.globalAudioPlayer.pause();
-                                } else {
-                                    await this.app.globalAudioPlayer.seek(seg.start);
-                                    await this.app.globalAudioPlayer.play();
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        });
-
         document.addEventListener('selectionchange', () => {
             const selection = window.getSelection();
             if (!selection || selection.isCollapsed) return;
@@ -210,15 +197,28 @@ export class TranscriptUI {
 
     showIfExist(id) {
         const el = document.getElementById(id);
-        if (el) el.classList.remove('hidden');
+        if (el) {
+            el.classList.remove('hidden');
+            el.style.display = 'flex';
+            el.style.visibility = 'visible';
+        }
     }
 
     hideIfExist(id) {
         const el = document.getElementById(id);
-        if (el) el.classList.add('hidden');
+        if (el) {
+            el.classList.add('hidden');
+            el.style.setProperty('display', 'none', 'important');
+        }
     }
 
     switchTranscriptView(viewId) {
+        console.log('switchTranscriptView called with:', viewId);
+        if (viewId !== 'live' && this.app.state.liveTranscriptMaximized) {
+            this.app.state.liveTranscriptMaximized = false;
+            document.body.classList.remove('live-transcript-maximized-active');
+        }
+
         const mainPanels = [
             'transcript-choice',
             'transcript-file-ui',
@@ -232,7 +232,10 @@ export class TranscriptUI {
             'transcript-settings-footer-container'
         ];
 
-        [...mainPanels, ...sidebarPanels].forEach(id => this.hideIfExist(id));
+        // Hide all panels first
+        [...mainPanels, ...sidebarPanels].forEach(id => {
+            this.hideIfExist(id);
+        });
 
         switch (viewId) {
             case 'choice':
@@ -262,7 +265,25 @@ export class TranscriptUI {
                 this.renderMultiFileSelection();
                 break;
             case 'live':
+                console.log('Attempting to show transcript-live-ui');
                 this.showIfExist('transcript-live-ui');
+                console.log('Attempting to show setLiveTab');
+                this.setLiveTab('record');
+                this.applyLiveTranscriptAppearance();
+                if (this.app.liveTranscriptionManager) {
+                    this.app.liveTranscriptionManager.requestLiveMicrophonePermission().catch(err => {
+                        console.error('Error requesting microphone permission:', err);
+                        this.app.state.liveRecordingError = 'Mikrofonberechtigung konnte nicht angefordert werden';
+                    });
+                }
+
+                const liveNewBtn = document.getElementById('new-transcription-btn');
+                if (liveNewBtn) {
+                    liveNewBtn.innerHTML = `
+                        <div class="icon"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg></div>
+                        <div class="label"><strong>Zurück</strong></div>
+                    `;
+                }
                 break;
             case 'view-transcript':
                 this.showIfExist('transcript-history-ui');
@@ -278,8 +299,459 @@ export class TranscriptUI {
         if (bBtn) bBtn.classList.toggle('hidden', viewId !== 'view-transcript');
     }
 
+    setLiveTab(tabId = 'record') {
+        const normalizedTabId = tabId === 'live-transcript' ? 'live-transcript' : 'record';
+
+        if (normalizedTabId !== 'live-transcript' && this.app.state.liveTranscriptMaximized) {
+            this.app.state.liveTranscriptMaximized = false;
+            document.body.classList.remove('live-transcript-maximized-active');
+        }
+
+        document.querySelectorAll('#live-record-tabs .transcript-tab[data-live-tab]')
+            .forEach(tab => tab.classList.toggle('active', tab.dataset.liveTab === normalizedTabId));
+
+        const recordPanel = document.getElementById('live-record-panel');
+        const transcriptPanel = document.getElementById('live-transcript-panel');
+        if (recordPanel) recordPanel.classList.toggle('hidden', normalizedTabId !== 'record');
+        if (transcriptPanel) transcriptPanel.classList.toggle('hidden', normalizedTabId !== 'live-transcript');
+
+        const recordSidebar = document.getElementById('live-record-sidebar-options');
+        const transcriptSidebar = document.getElementById('live-transcript-sidebar-options');
+        if (recordSidebar) recordSidebar.classList.toggle('hidden', normalizedTabId !== 'record');
+        if (transcriptSidebar) transcriptSidebar.classList.toggle('hidden', normalizedTabId !== 'live-transcript');
+
+        this.applyLiveTranscriptAppearance();
+    }
+
+    async initializeLiveAudioDevices() {
+        const deviceSelect = document.getElementById('live-input-device-select');
+        if (!deviceSelect) return;
+
+        if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+            deviceSelect.innerHTML = '<option value="">Mikrofonzugriff nicht unterstützt</option>';
+            deviceSelect.disabled = true;
+            return;
+        }
+
+        try {
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            const audioInputs = devices.filter(device => device.kind === 'audioinput');
+            this.app.state.liveInputDevices = audioInputs;
+
+            if (!this.app.state.liveSelectedDeviceId && audioInputs.length > 0) {
+                this.app.state.liveSelectedDeviceId = audioInputs[0].deviceId;
+            }
+
+            this.renderLiveAudioDeviceOptions();
+        } catch (error) {
+            console.error('Mikrofone konnten nicht geladen werden:', error);
+            deviceSelect.innerHTML = '<option value="">Mikrofone nicht verfügbar</option>';
+            deviceSelect.disabled = true;
+        }
+    }
+
+    async requestLiveMicrophonePermission() {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            this.setLiveRecordingError('Mikrofonzugriff wird von diesem Browser nicht unterstützt.');
+            return;
+        }
+
+        if (!window.isSecureContext) {
+            this.setLiveRecordingError('Mikrofonzugriff ist nur über HTTPS oder localhost möglich.');
+            return;
+        }
+
+        try {
+            this.app.state.liveRecordingStatus = 'requesting';
+            this.app.state.liveRecordingError = '';
+            this.updateLiveRecordingUi();
+
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            stream.getTracks().forEach(track => track.stop());
+
+            this.app.state.liveMicrophonePermissionGranted = true;
+            this.app.state.liveRecordingStatus = 'idle';
+            await this.initializeLiveAudioDevices();
+            this.updateLiveRecordingUi();
+        } catch (error) {
+            console.error('Mikrofonfreigabe konnte nicht angefragt werden:', error);
+            this.app.state.liveMicrophonePermissionGranted = false;
+            this.app.state.liveRecordingStatus = 'idle';
+            this.app.state.liveRecordingError = this.getLiveRecordingErrorMessage(error);
+            this.updateLiveRecordingUi();
+        }
+    }
+
+    renderLiveAudioDeviceOptions() {
+        const deviceSelect = document.getElementById('live-input-device-select');
+        if (!deviceSelect) return;
+
+        const devices = this.app.state.liveInputDevices || [];
+        if (devices.length === 0) {
+            deviceSelect.innerHTML = '<option value="">Standardmikrofon</option>';
+            deviceSelect.disabled = ['recording', 'stopping'].includes(this.app.state.liveRecordingStatus);
+            return;
+        }
+
+        deviceSelect.innerHTML = devices.map((device, index) => {
+            const label = device.label || `Mikrofon ${index + 1}`;
+            const selected = device.deviceId === this.app.state.liveSelectedDeviceId ? ' selected' : '';
+            return `<option value="${Utils.escapeHTML(device.deviceId)}"${selected}>${Utils.escapeHTML(label)}</option>`;
+        }).join('');
+        deviceSelect.disabled = ['recording', 'stopping'].includes(this.app.state.liveRecordingStatus);
+    }
+
+    async toggleLiveRecording() {
+        if (this.app.state.liveRecordingStatus === 'recording') {
+            this.stopLiveRecording();
+            return;
+        }
+
+        await this.startLiveRecording();
+    }
+
+    async startLiveRecording() {
+        if (!window.MediaRecorder) {
+            this.setLiveRecordingError('Audioaufnahme wird von diesem Browser nicht unterstützt.');
+            return;
+        }
+
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            this.setLiveRecordingError('Mikrofonzugriff wird von diesem Browser nicht unterstützt.');
+            return;
+        }
+
+        if (!window.isSecureContext) {
+            this.setLiveRecordingError('Mikrofonzugriff ist nur über HTTPS oder localhost möglich.');
+            return;
+        }
+
+        try {
+            this.app.state.liveRecordingStatus = 'requesting';
+            this.app.state.liveRecordingError = '';
+            this.updateLiveRecordingUi();
+
+            const stream = await this.getLiveRecordingStream();
+            const mimeType = this.getLiveRecordingMimeType();
+            const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+
+            this.revokeLiveRecordedFileUrl();
+            this.app.state.liveRecordingError = '';
+            this.app.state.liveMediaStream = stream;
+            this.app.state.liveRecorder = recorder;
+            this.app.state.liveAudioChunks = [];
+            this.app.state.liveRecordedFile = null;
+            this.app.state.liveRecordingStartedAt = Date.now();
+            this.app.state.liveRecordingDurationSeconds = 0;
+            this.app.state.liveRecordingStatus = 'recording';
+
+            recorder.addEventListener('dataavailable', (event) => {
+                if (event.data && event.data.size > 0) {
+                    this.app.state.liveAudioChunks.push(event.data);
+                }
+            });
+
+            recorder.addEventListener('stop', () => this.finalizeLiveRecording());
+            recorder.start();
+
+            await this.initializeLiveAudioDevices();
+            this.startLiveRecordingTimer();
+            this.updateLiveRecordingUi();
+        } catch (error) {
+            console.error('Aufnahme konnte nicht gestartet werden:', error);
+            this.stopLiveMediaStream();
+            this.app.state.liveRecordingStatus = 'idle';
+            this.app.state.liveRecordingError = this.getLiveRecordingErrorMessage(error);
+            this.updateLiveRecordingUi();
+        }
+    }
+
+    async getLiveRecordingStream() {
+        const selectedDeviceId = this.app.state.liveSelectedDeviceId;
+        const selectedDevice = (this.app.state.liveInputDevices || [])
+            .find(device => device.deviceId === selectedDeviceId);
+
+        if (!selectedDeviceId || !selectedDevice) {
+            return navigator.mediaDevices.getUserMedia({ audio: true });
+        }
+
+        try {
+            return await navigator.mediaDevices.getUserMedia({
+                audio: { deviceId: { exact: selectedDeviceId } }
+            });
+        } catch (error) {
+            if (error.name !== 'OverconstrainedError' && error.name !== 'NotFoundError') {
+                throw error;
+            }
+
+            this.app.state.liveSelectedDeviceId = '';
+            return navigator.mediaDevices.getUserMedia({ audio: true });
+        }
+    }
+
+    getLiveRecordingErrorMessage(error) {
+        if (error.name === 'NotAllowedError' || error.name === 'SecurityError') {
+            return 'Mikrofonzugriff wurde nicht erlaubt. Bitte erlaube das Mikrofon im Browser und versuche es erneut.';
+        }
+
+        if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
+            return 'Es wurde kein Mikrofon gefunden.';
+        }
+
+        if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
+            return 'Das Mikrofon ist gerade nicht verfügbar. Es wird eventuell von einer anderen Anwendung verwendet.';
+        }
+
+        return 'Die Aufnahme konnte nicht gestartet werden. Bitte prüfe Mikrofon und Browserberechtigung.';
+    }
+
+    setLiveRecordingError(message) {
+        this.app.state.liveRecordingError = message;
+        this.app.state.liveRecordingStatus = 'idle';
+        this.updateLiveRecordingUi();
+    }
+
+    stopLiveRecording() {
+        const recorder = this.app.state.liveRecorder;
+        if (!recorder || recorder.state === 'inactive') return;
+
+        this.app.state.liveRecordingStatus = 'stopping';
+        this.app.state.liveRecordingDurationSeconds = this.getLiveRecordingElapsedSeconds();
+        this.stopLiveRecordingTimer();
+        this.updateLiveRecordingUi();
+        recorder.stop();
+        this.stopLiveMediaStream();
+    }
+
+    finalizeLiveRecording() {
+        const chunks = this.app.state.liveAudioChunks || [];
+        const recorder = this.app.state.liveRecorder;
+        const mimeType = recorder?.mimeType || this.getLiveRecordingMimeType() || 'audio/webm';
+        const blob = new Blob(chunks, { type: mimeType });
+        const extension = this.getLiveRecordingExtension(mimeType);
+        const filename = `${this.getLiveRecordingBaseName()}.${extension}`;
+        const recordedFile = new File([blob], filename, {
+            type: mimeType,
+            lastModified: Date.now()
+        });
+
+        this.app.state.liveRecordedFile = recordedFile;
+        this.app.state.selectedAudioFile = recordedFile;
+        this.app.state.liveRecordedFileUrl = URL.createObjectURL(recordedFile);
+        this.app.state.audioFileUrl = this.app.state.liveRecordedFileUrl;
+        this.app.state.liveRecorder = null;
+        this.app.state.liveAudioChunks = [];
+        this.app.state.liveRecordingStatus = 'completed';
+
+        this.renderLiveAudioDeviceOptions();
+        this.updateLiveRecordingUi();
+
+        // Automatisch als normalen Datei-Upload behandeln
+        this.handleFileSelect([recordedFile], 0);
+        this.switchTranscriptView('file');
+        this.startTranscription();
+    }
+
+    startLiveRecordingTimer() {
+        this.stopLiveRecordingTimer();
+        this.app.state.liveRecordingTimer = window.setInterval(() => this.updateLiveRecordingUi(), 500);
+    }
+
+    stopLiveRecordingTimer() {
+        if (this.app.state.liveRecordingTimer) {
+            window.clearInterval(this.app.state.liveRecordingTimer);
+            this.app.state.liveRecordingTimer = null;
+        }
+    }
+
+    stopLiveMediaStream() {
+        if (this.app.state.liveMediaStream) {
+            this.app.state.liveMediaStream.getTracks().forEach(track => track.stop());
+            this.app.state.liveMediaStream = null;
+        }
+    }
+
+    updateLiveRecordingUi() {
+        const status = this.app.state.liveRecordingStatus || 'idle';
+        const startBtn = document.getElementById('live-record-start-btn');
+        const pauseBtn = document.getElementById('live-record-pause-btn');
+        const card = document.getElementById('live-record-card');
+        const iconWrap = document.getElementById('live-record-icon-wrap');
+        const badge = document.getElementById('live-record-badge');
+        const deviceSelect = document.getElementById('live-input-device-select');
+        const title = document.getElementById('live-record-status-title');
+        const text = document.getElementById('live-record-status-text');
+        const timer = document.getElementById('live-record-timer');
+        const recordedFile = this.app.state.liveRecordedFile;
+        const recordingError = this.app.state.liveRecordingError;
+        const microphoneReady = this.app.state.liveMicrophonePermissionGranted;
+
+        const elapsedSeconds = this.getLiveRecordingElapsedSeconds();
+        if (timer) timer.textContent = this.formatLiveRecordingTime(elapsedSeconds);
+
+        if (startBtn) {
+            startBtn.disabled = status === 'stopping' || status === 'requesting';
+            startBtn.style.opacity = status === 'stopping' || status === 'requesting' ? '0.7' : '';
+            startBtn.innerHTML = status === 'recording'
+                ? '<div style="width: 10px; height: 10px; background: white; border-radius: 2px;"></div>Aufnahme stoppen'
+                : status === 'requesting'
+                    ? '<div style="width: 10px; height: 10px; background: white; border-radius: 50%;"></div>Mikrofon freigeben'
+                    : '<div style="width: 10px; height: 10px; background: white; border-radius: 50%;"></div>Aufnahme starten';
+        }
+
+        if (pauseBtn) {
+            pauseBtn.disabled = true;
+            pauseBtn.style.cursor = 'not-allowed';
+            pauseBtn.style.opacity = '0.8';
+        }
+
+        if (card) {
+            card.style.borderColor = status === 'recording' ? '#ef4444' : '#e2e8f0';
+        }
+
+        if (iconWrap) {
+            iconWrap.style.background = status === 'recording' ? '#fee2e2' : '#eff6ff';
+        }
+
+        if (badge) {
+            badge.classList.toggle('hidden', status !== 'recording');
+        }
+
+        if (deviceSelect) {
+            deviceSelect.disabled = status === 'recording' || status === 'stopping' || status === 'requesting';
+        }
+
+        let titleText = 'Starten Sie Ihre Aufnahme';
+        let statusText = 'Wählen Sie unten ein Mikrofon aus und drücken Sie Aufnahme starten.';
+
+        if (status === 'recording') {
+            titleText = 'Aufnahme läuft';
+            statusText = 'Das ausgewählte Mikrofon wird lokal im Browser aufgenommen.';
+        } else if (status === 'requesting') {
+            titleText = 'Mikrofonfreigabe';
+            statusText = 'Bitte erlaube den Mikrofonzugriff in der Browser-Abfrage.';
+        } else if (status === 'stopping') {
+            titleText = 'Aufnahme wird beendet';
+            statusText = 'Die Audiodatei wird vorbereitet.';
+        } else if (recordingError) {
+            titleText = 'Aufnahme nicht möglich';
+            statusText = recordingError;
+        } else if (recordedFile) {
+            titleText = 'Aufnahme bereit';
+            statusText = `${recordedFile.name} (${this.formatFileSize(recordedFile.size)})`;
+        } else if (microphoneReady) {
+            titleText = 'Mikrofon bereit';
+            statusText = 'Wählen Sie ein Eingabegerät aus und starten Sie die Aufnahme.';
+        }
+
+        if (title) {
+            title.textContent = titleText;
+        }
+
+        if (text) {
+            text.textContent = statusText;
+            text.style.color = recordingError ? '#dc2626' : '#94a3b8';
+        }
+    }
+
+    getLiveRecordingElapsedSeconds() {
+        if (this.app.state.liveRecordingStatus !== 'recording' && this.app.state.liveRecordingDurationSeconds) {
+            return this.app.state.liveRecordingDurationSeconds;
+        }
+        if (!this.app.state.liveRecordingStartedAt) return 0;
+        return Math.max(0, Math.floor((Date.now() - this.app.state.liveRecordingStartedAt) / 1000));
+    }
+
+    formatLiveRecordingTime(totalSeconds) {
+        const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
+        const seconds = Math.floor(totalSeconds % 60).toString().padStart(2, '0');
+        return `${minutes}:${seconds}`;
+    }
+
+    getLiveRecordingMimeType() {
+        const candidates = [
+            'audio/webm;codecs=opus',
+            'audio/webm',
+            'audio/ogg;codecs=opus',
+            'audio/ogg'
+        ];
+
+        return candidates.find(type => MediaRecorder.isTypeSupported(type)) || '';
+    }
+
+    getLiveRecordingExtension(mimeType) {
+        return mimeType.includes('ogg') ? 'ogg' : 'webm';
+    }
+
+    getLiveRecordingBaseName() {
+        const timestamp = new Date().toISOString().slice(0, 19).replace('T', '_').replace(/:/g, '-');
+        return `aufnahme_${timestamp}`;
+    }
+
+    formatFileSize(bytes) {
+        if (!bytes) return '0 KB';
+        const megabytes = bytes / (1024 * 1024);
+        if (megabytes >= 1) return `${megabytes.toFixed(1)} MB`;
+        return `${Math.ceil(bytes / 1024)} KB`;
+    }
+
+    revokeLiveRecordedFileUrl() {
+        if (this.app.state.audioFileUrl && this.app.state.audioFileUrl === this.app.state.liveRecordedFileUrl) {
+            this.app.state.audioFileUrl = null;
+        }
+
+        if (this.app.state.liveRecordedFileUrl) {
+            URL.revokeObjectURL(this.app.state.liveRecordedFileUrl);
+            this.app.state.liveRecordedFileUrl = null;
+        }
+    }
+
+    applyLiveTranscriptAppearance() {
+        const previewCard = document.getElementById('live-transcript-preview-card');
+        const sizeValue = document.getElementById('live-font-size-value');
+        const sizeSlider = document.getElementById('live-font-size-slider');
+        const contrastButton = document.getElementById('live-contrast-toggle');
+        const contrastButtonLabel = document.getElementById('live-contrast-toggle-label');
+        const maximizeButton = document.getElementById('live-transcript-maximize-toggle');
+
+        const fontSize = this.app.state.liveTranscriptFontSize || 18;
+        const isInverted = Boolean(this.app.state.liveTranscriptContrastInverted);
+        const isMaximized = Boolean(this.app.state.liveTranscriptMaximized);
+
+        if (sizeSlider && String(sizeSlider.value) !== String(fontSize)) {
+            sizeSlider.value = String(fontSize);
+        }
+
+        if (sizeValue) {
+            sizeValue.textContent = `${fontSize} px`;
+        }
+
+        if (previewCard) {
+            previewCard.style.setProperty('--live-font-size', `${fontSize}px`);
+            previewCard.classList.toggle('live-transcript-preview-maximized', isMaximized);
+            previewCard.style.backgroundColor = isInverted ? '#0f172a' : '#f8fafc';
+            previewCard.style.color = isInverted ? '#f8fafc' : '#0f172a';
+            previewCard.style.borderColor = isInverted ? '#1e293b' : '#e2e8f0';
+        }
+
+        document.body.classList.toggle('live-transcript-maximized-active', isMaximized);
+
+        if (contrastButton) {
+            contrastButton.setAttribute('aria-pressed', isInverted ? 'true' : 'false');
+        }
+
+        if (contrastButtonLabel) {
+            contrastButtonLabel.textContent = 'Kontrast umkehren';
+        }
+
+        if (maximizeButton) {
+            maximizeButton.setAttribute('aria-pressed', isMaximized ? 'true' : 'false');
+            maximizeButton.title = isMaximized ? 'Textansicht minimieren' : 'Textansicht maximieren';
+        }
+    }
+
     switchTab(tabId) {
-        document.querySelectorAll('.transcript-tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.transcript-tab[data-tab]').forEach(t => t.classList.remove('active'));
         document.querySelectorAll('.tab-content').forEach(c => c.classList.add('hidden'));
 
         const activeTabBtn = document.querySelector(`.transcript-tab[data-tab="${tabId}"]`);
@@ -287,40 +759,6 @@ export class TranscriptUI {
 
         const activeContent = document.getElementById(`tab-${tabId}`);
         if (activeContent) activeContent.classList.remove('hidden');
-
-        if (this.app.globalAudioPlayer) {
-            this.app.globalAudioPlayer.playRange = null;
-        }
-
-        const globalPlayer = document.getElementById('global-audio-player');
-        const togglePlayerBtn = document.getElementById('toggle-audio-player-btn');
-        if (globalPlayer) {
-            globalPlayer.classList.toggle('hidden-export', tabId === 'export');
-            if (tabId === 'vorschau' || tabId === 'korrekturen') {
-                const targetHeader = document.querySelector(`#tab-${tabId} .transcript-view-header`);
-                if (targetHeader) {
-                    if (targetHeader.nextSibling) {
-                        targetHeader.parentNode.insertBefore(globalPlayer, targetHeader.nextSibling);
-                    } else {
-                        targetHeader.parentNode.appendChild(globalPlayer);
-                    }
-                }
-            }
-        }
-        if (togglePlayerBtn) {
-            togglePlayerBtn.classList.toggle('hidden-export', tabId === 'export');
-            if (tabId === 'vorschau' || tabId === 'korrekturen') {
-                const actionsContainer = document.querySelector(`#tab-${tabId} .header-actions-container`);
-                if (actionsContainer) {
-                    const sidebarToggleBtn = actionsContainer.querySelector('#sidebar-toggle-btn');
-                    if (sidebarToggleBtn) {
-                        actionsContainer.insertBefore(togglePlayerBtn, sidebarToggleBtn);
-                    } else {
-                        actionsContainer.appendChild(togglePlayerBtn);
-                    }
-                }
-            }
-        }
 
         if (tabId === 'korrekturen') {
             this.app.state.editModeActive = true;
@@ -335,7 +773,7 @@ export class TranscriptUI {
             document.getElementById('selection-toolbar')?.remove();
             document.getElementById('custom-context-menu')?.classList.add('hidden');
             if (this.app.exportManager) {
-                this.app.exportManager.selectExportOption(this.app.state.exportType || 'summary');
+                this.app.exportManager.selectExportOption(this.app.state.exportType || 'ergebnis');
             }
         }
     }
@@ -414,16 +852,17 @@ export class TranscriptUI {
         if (this.app.state.isProcessing) return; // Disable drop interactions while processing
         if (!Array.isArray(files) || files.length === 0) return;
         const maxFileSize = 500 * 1024 * 1024;
-        const validTypes = ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/m4a', 'audio/ogg', 'video/mp4'];
+        const validTypes = ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/m4a', 'audio/ogg', 'video/mp4', 'audio/webm'];
         const accepted = [];
 
         for (const file of files) {
-            if (!validTypes.includes(file.type) && !file.name.match(/\.(mp3|wav|m4a|mp4|ogg)$/i)) {
-                alert("Wir unterstützen .mp3, .wav, .m4a und .ogg.\n\nMaximal 500MB pro Datei.");
+            const baseType = file.type.split(';')[0];
+            if (!validTypes.includes(baseType) && !file.name.match(/\.(mp3|wav|m4a|mp4|ogg|webm)$/i)) {
+                alert("Wir unterstützen .mp3, .wav, .m4a, .ogg und .webm.\n\nMaximal 500MB pro Datei.");
                 continue;
             }
             if (file.size > maxFileSize) {
-                alert("Wir unterstützen .mp3, .wav, .m4a und .ogg.\n\nMaximal 500MB pro Datei.");
+                alert("Wir unterstützen .mp3, .wav, .m4a, .ogg und .webm.\n\nMaximal 500MB pro Datei.");
                 continue;
             }
             accepted.push(file);
@@ -754,11 +1193,10 @@ export class TranscriptUI {
                 row.dataset.fileRow = `${groupIndex}:${fileIndex}`;
                 row.dataset.fileId = file._id || '';
                 const fileSizeMb = (file.size / (1024 * 1024)).toFixed(1);
-                const hasResult = isCompleted || !!file.transcriptionResult;
                 row.innerHTML = `
                     <div class="multi-upload-row">
                         <div class="multi-upload-file-main">
-                            <span class="multi-upload-drag-handle" draggable="${hasResult ? 'false' : 'true'}" data-drag-handle="${groupIndex}:${fileIndex}" aria-label="Datei verschieben" title="Datei verschieben" ${hasResult ? 'style="display: none;"' : ''}>
+                            <span class="multi-upload-drag-handle" draggable="${isCompleted ? 'false' : 'true'}" data-drag-handle="${groupIndex}:${fileIndex}" aria-label="Datei verschieben" title="Datei verschieben" ${isCompleted ? 'style="display: none;"' : ''}>
                                 <span></span><span></span><span></span>
                                 <span></span><span></span><span></span>
                             </span>
@@ -766,17 +1204,17 @@ export class TranscriptUI {
                             <div class="multi-upload-name-container">
                                 <span class="multi-upload-name" title="${file.name}">${file.name}</span>
                                 <div class="multi-upload-progress-container">
-                                    <div class="multi-upload-progress-bar ${hasResult ? 'is-success' : 'is-ready'}" style="width: ${hasResult ? '100%' : '0%'};"></div>
+                                    <div class="multi-upload-progress-bar ${isCompleted ? 'is-success' : 'is-ready'}" style="width: ${isCompleted ? '100%' : '0%'};"></div>
                                 </div>
                             </div>
                         </div>
                         <div class="multi-upload-meta">
-                            ${!hasResult && file.analysisStatus === 'ready' ? `<button type="button" class="multi-upload-add-btn open-speaker-btn" data-speaker-mapping="${groupIndex}:${fileIndex}" style="margin-right: 10px;">Sprecher anpassen (${file.speakers ? file.speakers.length : '0'})</button>` : ''}
+                            ${!isCompleted && file.analysisStatus === 'ready' ? `<button type="button" class="multi-upload-add-btn open-speaker-btn" data-speaker-mapping="${groupIndex}:${fileIndex}" style="margin-right: 10px;">Sprecher anpassen (${file.speakers ? file.speakers.length : '0'})</button>` : ''}
                             <div class="multi-upload-status-wrap">
-                                <span class="multi-upload-status ${hasResult ? 'is-success' : 'is-ready'}">${hasResult ? 'Fertig' : 'Bereit'}</span>
+                                <span class="multi-upload-status ${isCompleted ? 'is-success' : 'is-ready'}">${isCompleted ? 'Fertig' : 'Bereit'}</span>
                                 <span class="multi-upload-size">${fileSizeMb} MB</span>
                             </div>
-                            <button type="button" class="multi-upload-icon-btn" data-file-remove="${groupIndex}:${fileIndex}" aria-label="Datei entfernen" title="Datei entfernen" ${hasResult ? 'style="display: none;"' : ''}>
+                            <button type="button" class="multi-upload-icon-btn" data-file-remove="${groupIndex}:${fileIndex}" aria-label="Datei entfernen" title="Datei entfernen" ${isCompleted ? 'style="display: none;"' : ''}>
                                 <svg viewBox="0 0 24 24" fill="none">
                                     <path d="M7 7l10 10M17 7L7 17" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
                                 </svg>
@@ -1097,22 +1535,74 @@ export class TranscriptUI {
             }
         }
 
-        // Initialize Custom Audio Player in snippet mode (Modus 2)
+        // Show loading state in both button and placeholder
+        btn.innerHTML = `<span class="start-btn-spinner" style="border-color: currentColor; border-top-color: transparent; width: 12px; height: 12px; margin: 1px; display: inline-block; border-radius: 50%; border-style: solid; border-width: 2px; animation: spin 1s linear infinite;"></span>`;
+        playerPlaceholder.innerHTML = `<div style="padding: 10px; background: var(--chat-msg-bg, #f8fafc); border-radius: 6px; font-size: 12px; color: var(--text-muted, #64748b); margin-top: 5px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--border-color, #e2e8f0);">
+            <div class="loader-spinner" style="width: 14px; height: 14px; border-width: 2px; margin-right: 8px;"></div>
+            Audio-Stream wird geladen...
+        </div>`;
         this.currentAudioBtn = btn;
         this.currentAudioPlaceholder = playerPlaceholder;
-        btn.innerHTML = stopIcon;
 
-        this.activeSnippetPlayer = new CustomAudioPlayer({
-            container: playerPlaceholder,
-            mode: 'snippet',
-            slug: this.app.state.currentTranscriptSlug,
-            jobId: targetJobId,
-            fileIndex: fileIndex,
-            start: playStart,
-            end: playEnd
+        const queryParams = new URLSearchParams();
+        if (targetJobId) {
+            queryParams.set('job_id', targetJobId);
+        } else if (this.app.state.currentTranscriptSlug) {
+            queryParams.set('slug', this.app.state.currentTranscriptSlug);
+            queryParams.set('index', String(fileIndex));
+        }
+
+        fetch(`/req/transcription/audio?${queryParams.toString()}`, {
+            headers: { 'Accept': 'application/json' }
+        })
+        .then(res => {
+            if (!res.ok) {
+                throw new Error('Server returned error status');
+            }
+            return res.json();
+        })
+        .then(data => {
+            if (!data.success || !data.url) {
+                throw new Error(data.message || 'Stream URL missing');
+            }
+
+            const fileUrl = data.url;
+            const audioUniqueId = targetJobId || `${this.app.state.currentTranscriptSlug}_${fileIndex}`;
+
+            playerPlaceholder.innerHTML = `<audio controls style="width: 100%; height: 40px; margin-top: 5px;" data-file-id="${audioUniqueId}">
+                <source src="${fileUrl}" type="audio/mpeg">
+                Dein Browser unterstützt das Audio-Element nicht.
+            </audio>`;
+            const audio = playerPlaceholder.querySelector('audio');
+            audio.dataset.fileId = audioUniqueId;
+
+            this.currentAudioPlayer = audio;
+            btn.innerHTML = stopIcon;
+
+            audio.currentTime = playStart;
+            audio.play().catch(e => console.error("Audio playback failed", e));
+
+            this.audioUpdateHandler = () => {
+                if (audio.currentTime >= playEnd) {
+                    this.stopCurrentAudio();
+                }
+            };
+            audio.addEventListener('timeupdate', this.audioUpdateHandler);
+
+            audio.addEventListener('pause', () => {
+                if (this.currentAudioPlayer === audio && this.currentAudioBtn) {
+                    this.currentAudioBtn.innerHTML = playIcon;
+                }
+            }, { once: true });
+        })
+        .catch(err => {
+            console.error('Failed to get streaming URL:', err);
+            playerPlaceholder.innerHTML = `<div style="padding: 10px; background: #fee2e2; border-radius: 6px; font-size: 12px; color: #b91c1c; margin-top: 5px; display: flex; align-items: center; justify-content: center; border: 1px solid #fecaca;">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 8px;"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+                Audio-Wiedergabe nicht verfügbar (Datei nicht gefunden)
+            </div>`;
+            btn.innerHTML = stopIcon;
         });
-
-        this.activeSnippetPlayer.play();
     }
 
     stopCurrentAudio() {
@@ -1120,20 +1610,6 @@ export class TranscriptUI {
                             <path d="M8.25 3.75L4.5 6.75H1.5V11.25H4.5L8.25 14.25V3.75Z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                             <path d="M14.3018 3.69727C15.7078 5.10372 16.4977 7.01103 16.4977 8.99977C16.4977 10.9885 15.7078 12.8958 14.3018 14.3023M11.6543 6.34477C12.3573 7.04799 12.7522 8.00165 12.7522 8.99602C12.7522 9.99038 12.3573 10.944 11.6543 11.6473" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                         </svg>`;
-
-        if (this.activeSnippetPlayer) {
-            this.activeSnippetPlayer.destroy();
-            this.activeSnippetPlayer = null;
-        }
-
-        if (this.app.globalAudioPlayer) {
-            this.app.globalAudioPlayer.pause();
-        }
-
-        if (this.sidebarPlayers) {
-            this.sidebarPlayers.forEach(p => p.destroy());
-            this.sidebarPlayers.clear();
-        }
 
         if (this.currentAudioPlayer) {
             this.currentAudioPlayer.pause();
@@ -1155,176 +1631,6 @@ export class TranscriptUI {
         }
     }
 
-
-    initGlobalAudioPlayer() {
-        const placeholder = document.getElementById('global-audio-player');
-        if (!placeholder) return;
-
-        // Move the global audio player to the active tab beneath its transcript-view-header
-        const activeTabId = this.app.state.editModeActive ? 'korrekturen' : 'vorschau';
-        const targetHeader = document.querySelector(`#tab-${activeTabId} .transcript-view-header`);
-        if (targetHeader) {
-            if (targetHeader.nextSibling) {
-                targetHeader.parentNode.insertBefore(placeholder, targetHeader.nextSibling);
-            } else {
-                targetHeader.parentNode.appendChild(placeholder);
-            }
-        }
-
-        const togglePlayerBtn = document.getElementById('toggle-audio-player-btn');
-        if (togglePlayerBtn) {
-            togglePlayerBtn.classList.toggle('hidden-export', activeTabId === 'export');
-            if (activeTabId === 'vorschau' || activeTabId === 'korrekturen') {
-                const actionsContainer = document.querySelector(`#tab-${activeTabId} .header-actions-container`);
-                if (actionsContainer) {
-                    const sidebarToggleBtn = actionsContainer.querySelector('#sidebar-toggle-btn');
-                    if (sidebarToggleBtn) {
-                        actionsContainer.insertBefore(togglePlayerBtn, sidebarToggleBtn);
-                    } else {
-                        actionsContainer.appendChild(togglePlayerBtn);
-                    }
-                }
-            }
-        }
-
-        const metadata = this.app.state.currentTranscriptMetadata;
-        const slug = this.app.state.currentTranscriptSlug;
-        const segments = this.app.state.currentTranscriptSegments;
-
-        if (!segments || segments.length === 0) {
-            placeholder.innerHTML = 'Keine Transkription geladen';
-            return;
-        }
-
-        // Build source files
-        let audioSources = metadata?.source_files;
-        if (!audioSources) {
-            const filename = this.app.state.selectedAudioFile?.name || 'Audio.mp3';
-            const size = this.app.state.selectedAudioFile?.size || 0;
-            const duration = this.app.state.currentTranscriptSegments.length > 0
-                ? this.app.state.currentTranscriptSegments[this.app.state.currentTranscriptSegments.length - 1].end
-                : 300;
-
-            audioSources = [{
-                name: filename,
-                size: size,
-                duration: duration,
-                start_time: 0,
-                end_time: duration,
-                job_id: metadata?.job_id || null
-            }];
-        }
-
-        // Build segments list for timeline
-        const timelineSegments = [];
-        const speakerBlocks = this.app.state.lastRenderedSpeakerBlocks || [];
-        speakerBlocks.forEach((block, idx) => {
-            const start = block.startTime;
-            const end = segments[block.segmentIndices[block.segmentIndices.length - 1]].end;
-            timelineSegments.push({
-                start: start,
-                end: end,
-                speaker: block.speakerName,
-                colorId: block.colorId,
-                text: block.text
-            });
-        });
-
-        if (this.app.globalAudioPlayer) {
-            if (this.app.globalAudioPlayer.slug === slug) {
-                this.app.globalAudioPlayer.segments = timelineSegments;
-                this.app.globalAudioPlayer.renderGlobalSegments();
-                return;
-            }
-            this.app.globalAudioPlayer.destroy();
-            this.app.globalAudioPlayer = null;
-        }
-
-        let lastActiveBlockIdx = -1;
-
-        this.app.globalAudioPlayer = new CustomAudioPlayer({
-            container: placeholder,
-            mode: 'global',
-            slug: slug,
-            audioSources: audioSources,
-            segments: timelineSegments,
-            onPlay: () => {
-                const previewResult = document.getElementById('transcription-result');
-                if (previewResult) {
-                    previewResult.classList.add('audio-is-playing');
-                }
-                const editResult = document.getElementById('transcription-result-container-edit');
-                if (editResult) {
-                    editResult.classList.add('audio-is-playing');
-                }
-            },
-            onPause: () => {
-                const previewResult = document.getElementById('transcription-result');
-                if (previewResult) {
-                    previewResult.classList.remove('audio-is-playing');
-                }
-                const editResult = document.getElementById('transcription-result-container-edit');
-                if (editResult) {
-                    editResult.classList.remove('audio-is-playing');
-                }
-            },
-            onTimeUpdate: (globalTime) => {
-                // Highlight active segment block in transcript
-                const activeBlock = timelineSegments.find(s => globalTime >= s.start && globalTime < s.end);
-                const blockIdx = activeBlock ? timelineSegments.indexOf(activeBlock) : -1;
-
-                if (blockIdx !== lastActiveBlockIdx) {
-                    lastActiveBlockIdx = blockIdx;
-
-                    document.querySelectorAll('.transcript-segment').forEach(el => {
-                        el.classList.remove('active-playing-segment');
-                        el.classList.remove('active-selection');
-                        el.classList.remove('speaker-highlighted');
-                    });
-                    
-                    document.querySelectorAll('.player-segment').forEach(el => {
-                        el.classList.remove('is-highlighted');
-                    });
-
-                    if (activeBlock) {
-                        const previewSegEl = document.querySelector(`#transcription-result .transcript-segment[data-block-idx="${blockIdx}"]`);
-                        if (previewSegEl) {
-                            previewSegEl.classList.add('active-playing-segment');
-                            previewSegEl.classList.add('active-selection');
-                            previewSegEl.classList.add('speaker-highlighted');
-                            if (!window.app?.state?.editModeActive) {
-                                previewSegEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                            }
-                        }
-                        
-                        const editSegEl = document.querySelector(`#transcription-result-container-edit .transcript-segment[data-block-idx="${blockIdx}"]`);
-                        if (editSegEl) {
-                            editSegEl.classList.add('active-playing-segment');
-                            editSegEl.classList.add('active-selection');
-                            editSegEl.classList.add('speaker-highlighted');
-                            if (window.app?.state?.editModeActive) {
-                                editSegEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                            }
-                        }
-                        
-                        const playerSegEl = placeholder.querySelectorAll('.player-segment')[blockIdx];
-                        if (playerSegEl) {
-                            playerSegEl.classList.add('is-highlighted');
-                        }
-                    }
-                }
-            },
-            onSegmentClick: (seg) => {
-                const blockIdx = timelineSegments.indexOf(seg);
-                const containerId = window.app?.state?.editModeActive ? 'transcription-result-container-edit' : 'transcription-result';
-                const selector = `#${containerId} .transcript-segment[data-block-idx="${blockIdx}"]`;
-                const transcriptSegEl = document.querySelector(selector);
-                if (transcriptSegEl) {
-                    transcriptSegEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                }
-            }
-        });
-    }
 
     openTranscriptSettings() {
         this.app.service.loadTranscriptConfig();
@@ -1389,12 +1695,6 @@ export class TranscriptUI {
             return parseFloat(timeStr.toString().replace(',', '.'));
         };
 
-        // Cleanup any existing sidebar players first
-        if (this.sidebarPlayers) {
-            this.sidebarPlayers.forEach(p => p.destroy());
-            this.sidebarPlayers.clear();
-        }
-
         sidebarSpeakerEl.innerHTML = `
             <div class="speaker-mapping-header" style="margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center;">
                 <h4 style="margin: 0; font-size: 14px; font-weight: 600;">Sprecher für <br><small style="font-weight:normal; color:#666;">${file.name}</small></h4>
@@ -1403,30 +1703,36 @@ export class TranscriptUI {
             <div class="speaker-mapping-list" style="display: flex; flex-direction: column; gap: 15px;">
                 ${file.speakers.map((sp, idx) => `
                     <div class="speaker-mapping-item" style="display: flex; flex-direction: column; gap: 8px; background: #fbfcff; border: 1px solid #e8edf5; padding: 12px; border-radius: 8px;">
-                        <div class="speaker-player-container" data-speaker-id="${sp.id}"></div>
+                        <audio controls class="speaker-audio-preview" data-speaker-id="${sp.id}" data-base-url="${sp.audio_url.split('#')[0]}" src="${sp.audio_url.split('#')[0]}#t=${sp.start},${sp.end}" style="width: 100%; height: 35px;"></audio>
                         ${sp.samples && sp.samples.length > 0 ? `
-                            <div style="display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px;">
-                                ${sp.samples.map((samp, sIdx) => {
-                                    const isActive = Math.abs(samp.start - sp.start) < 0.05 && Math.abs(samp.end - sp.end) < 0.05;
-                                    return `
-                                        <button type="button" class="speaker-sample-btn ${isActive ? 'active' : ''}" 
-                                            data-speaker-id="${sp.id}" 
-                                            data-sample-idx="${sIdx}"
-                                            data-start="${samp.start}" 
-                                            data-end="${samp.end}"
-                                            style="font-size: 10px; padding: 2px 6px; border-radius: 4px; cursor: pointer; transition: all 0.2s; ${isActive ? 'border: 1px solid #1A73E8; background: #1A73E8; color: #ffffff;' : 'border: 1px solid #c5d3e8; background: #eef2f9; color: #4b648c;'}">
-                                            Beispiel ${sIdx + 1}
-                                        </button>
-                                    `;
-                                }).join('')}
+                            <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+                                ${sp.samples.map((samp, sIdx) => `
+                                    <button type="button" class="speaker-sample-btn" 
+                                        data-speaker-id="${sp.id}" 
+                                        data-start="${samp.start}" 
+                                        data-end="${samp.end}"
+                                        style="font-size: 10px; padding: 2px 6px; border: 1px solid #c5d3e8; background: #eef2f9; color: #4b648c; border-radius: 4px; cursor: pointer; transition: all 0.2s;">
+                                        Beispiel ${sIdx + 1}
+                                    </button>
+                                `).join('')}
                             </div>
                         ` : ''}
-                        <div class="transcript-sidebar-field" style="margin-bottom: 0; margin-top: 4px;">
+                        <div class="transcript-sidebar-field" style="margin-bottom: 0;">
                             <label style="font-size: 12px; margin-bottom: 4px;">${sp.label}</label>
                             <input type="text" class="speaker-mapping-input" 
                                 data-speaker-id="${sp.id}" 
                                 value="${file.speakerMapping[sp.id] || ''}" 
                                 placeholder="Name (z.B. Interviewer)">
+                        </div>
+                        <div style="display: flex; gap: 10px;">
+                            <div class="transcript-sidebar-field" style="flex: 1; margin-bottom: 0; min-width: 0;">
+                                <label style="font-size: 10px; margin-bottom: 2px;">Start (mm:ss)</label>
+                                <input type="text" class="speaker-time-input speaker-start-input" data-speaker-id="${sp.id}" value="${formatTime(sp.start)}" placeholder="00:00" style="min-width: 0;">
+                            </div>
+                            <div class="transcript-sidebar-field" style="flex: 1; margin-bottom: 0; min-width: 0;">
+                                <label style="font-size: 10px; margin-bottom: 2px;">Ende (mm:ss)</label>
+                                <input type="text" class="speaker-time-input speaker-end-input" data-speaker-id="${sp.id}" value="${formatTime(sp.end)}" placeholder="00:05" style="min-width: 0;">
+                            </div>
                         </div>
                     </div>
                 `).join('')}
@@ -1458,43 +1764,6 @@ export class TranscriptUI {
                 <button type="button" class="group-transcript-open-btn save-speaker-mapping-btn" style="width: 100%;">Sprecher speichern</button>
             </div>
         `;
-
-        // Initialize CustomAudioPlayer for each speaker container
-        const containers = sidebarSpeakerEl.querySelectorAll('.speaker-player-container');
-        containers.forEach(container => {
-            const spId = container.getAttribute('data-speaker-id');
-            const sp = file.speakers.find(s => s.id === spId);
-            if (sp) {
-                const directUrl = sp.audio_url.split('#')[0];
-                const player = new CustomAudioPlayer({
-                    container: container,
-                    mode: 'editor',
-                    directUrl: directUrl,
-                    start: sp.start,
-                    end: sp.end,
-                    speakerId: sp.id,
-                    fileDuration: file.duration || 0,
-                    onRangeChange: (newStart, newEnd) => {
-                        sp.start = newStart;
-                        sp.end = newEnd;
-
-                        // Sync range changes back to the active sample button & data store
-                        const activeBtn = sidebarSpeakerEl.querySelector(`.speaker-sample-btn.active[data-speaker-id="${sp.id}"]`);
-                        if (activeBtn) {
-                            activeBtn.setAttribute('data-start', newStart);
-                            activeBtn.setAttribute('data-end', newEnd);
-
-                            const sampleIdx = parseInt(activeBtn.getAttribute('data-sample-idx'), 10);
-                            if (sp.samples && sp.samples[sampleIdx]) {
-                                sp.samples[sampleIdx].start = newStart;
-                                sp.samples[sampleIdx].end = newEnd;
-                            }
-                        }
-                    }
-                });
-                this.sidebarPlayers.set(spId, player);
-            }
-        });
 
         // Function to save current inputs
         const saveCurrentInputs = () => {
@@ -1537,33 +1806,46 @@ export class TranscriptUI {
             });
         });
 
+        // Update audio preview on time change
+        const timeInputs = sidebarSpeakerEl.querySelectorAll('.speaker-time-input');
+        timeInputs.forEach(input => {
+            input.addEventListener('change', (e) => {
+                const spId = e.target.dataset.speakerId;
+                const audioEl = sidebarSpeakerEl.querySelector(`.speaker-audio-preview[data-speaker-id="${spId}"]`);
+                const startEl = sidebarSpeakerEl.querySelector(`.speaker-start-input[data-speaker-id="${spId}"]`);
+                const endEl = sidebarSpeakerEl.querySelector(`.speaker-end-input[data-speaker-id="${spId}"]`);
+                
+                if (audioEl && startEl && endEl) {
+                    const baseUrl = audioEl.dataset.baseUrl;
+                    const s = parseTime(startEl.value);
+                    const eTime = parseTime(endEl.value);
+                    audioEl.src = `${baseUrl}#t=${s},${eTime}`;
+                    audioEl.load();
+                }
+            });
+        });
+
         // Sample button clicks
         const sampleBtns = sidebarSpeakerEl.querySelectorAll('.speaker-sample-btn');
         sampleBtns.forEach(btn => {
-            btn.addEventListener('click', async (e) => {
-                const spId = btn.getAttribute('data-speaker-id');
-                const start = parseFloat(btn.getAttribute('data-start'));
-                const end = parseFloat(btn.getAttribute('data-end'));
+            btn.addEventListener('click', (e) => {
+                const spId = e.target.getAttribute('data-speaker-id');
+                const start = parseFloat(e.target.getAttribute('data-start'));
+                const end = parseFloat(e.target.getAttribute('data-end'));
 
-                // Deactivate other sample buttons for this speaker
-                const speakerBtns = sidebarSpeakerEl.querySelectorAll(`.speaker-sample-btn[data-speaker-id="${spId}"]`);
-                speakerBtns.forEach(b => {
-                    b.classList.remove('active');
-                    b.style.border = '1px solid #c5d3e8';
-                    b.style.background = '#eef2f9';
-                    b.style.color = '#4b648c';
-                });
-
-                // Activate this button
-                btn.classList.add('active');
-                btn.style.border = '1px solid #1A73E8';
-                btn.style.background = '#1A73E8';
-                btn.style.color = '#ffffff';
-
-                // Find the player
-                const player = this.sidebarPlayers.get(spId);
-                if (player) {
-                    await player.updateRange(start, end);
+                // Update inputs
+                const startInput = sidebarSpeakerEl.querySelector(`.speaker-start-input[data-speaker-id="${spId}"]`);
+                const endInput = sidebarSpeakerEl.querySelector(`.speaker-end-input[data-speaker-id="${spId}"]`);
+                if (startInput) startInput.value = formatTime(start);
+                if (endInput) endInput.value = formatTime(end);
+                
+                // Update audio and play immediately
+                const audioEl = sidebarSpeakerEl.querySelector(`.speaker-audio-preview[data-speaker-id="${spId}"]`);
+                if (audioEl) {
+                    const baseUrl = audioEl.dataset.baseUrl;
+                    audioEl.src = `${baseUrl}#t=${start},${end}`;
+                    audioEl.currentTime = start;
+                    audioEl.play().catch(e => console.log('Auto-play prevented', e));
                 }
 
                 // Update file data
@@ -1589,11 +1871,6 @@ export class TranscriptUI {
         const closeBtn = sidebarSpeakerEl.querySelector('.close-speaker-mapping-btn');
         if (closeBtn) {
             closeBtn.addEventListener('click', () => {
-                // Destroy all sidebar players on close
-                if (this.sidebarPlayers) {
-                    this.sidebarPlayers.forEach(p => p.destroy());
-                    this.sidebarPlayers.clear();
-                }
                 sidebarSpeakerEl.classList.add('hidden');
                 if (historyEl) historyEl.classList.remove('hidden');
             });
@@ -1603,12 +1880,6 @@ export class TranscriptUI {
         if (saveBtn) {
             saveBtn.addEventListener('click', () => {
                 saveCurrentInputs();
-
-                // Destroy all sidebar players on save
-                if (this.sidebarPlayers) {
-                    this.sidebarPlayers.forEach(p => p.destroy());
-                    this.sidebarPlayers.clear();
-                }
 
                 const originalText = saveBtn.textContent;
                 saveBtn.textContent = 'Gespeichert!';
@@ -1657,10 +1928,6 @@ export class TranscriptUI {
                 } else if (resDivVorschau) {
                     this.app.processor.populateSpeakerPanel(resDivVorschau);
                 }
-            }
-
-            if (resDivVorschau || resDivEdit) {
-                this.initGlobalAudioPlayer();
             }
         }
     }
@@ -1829,15 +2096,10 @@ export class TranscriptUI {
             const fileResults = [];
             let allFilesSuccessful = true;
 
-            const filePromises = files.map(async (file, fileIndex) => {
-                try {
-                    // Check if we already have the successful result from a previous run
-                    if (file.transcriptionResult) {
-                        fileResults[fileIndex] = file.transcriptionResult;
-                        this.updateFileProgressByFile(file, 100, 'Bereit (aus Cache)', 'success');
-                        return;
-                    }
+            for (let fileIndex = 0; fileIndex < files.length; fileIndex++) {
+                const file = files[fileIndex];
 
+                try {
                     // Wait for analysis to finish if still processing
                     if (file.analysisStatus === 'processing') {
                         this.updateFileProgressByFile(file, 25, 'Warte auf Analyse...', 'processing');
@@ -1945,7 +2207,7 @@ export class TranscriptUI {
                             resultData = statusData.result;
                             file.duration = (resultData && resultData.duration) || file.duration;
                             this.updateFileProgress(100, 'Transcription abgeschlossen', 'success', groupIndex, fileIndex);
-                        } else if (statusData.status === 'transcribing' || statusData.status === 'optimizing') {
+                        } else if (statusData.status === 'transcribing') {
                             let percent = 40;
                             let msg = 'Transcription Startet...';
                             if (statusData.manifest && statusData.manifest.progress) {
@@ -1982,7 +2244,6 @@ export class TranscriptUI {
 
                     if (resultData && resultData.success) {
                         fileResults[fileIndex] = resultData;
-                        file.transcriptionResult = resultData; // Cache successful result on file object
                     } else {
                         throw new Error(resultData?.message || "Keine Antwort vom Server.");
                     }
@@ -1991,14 +2252,12 @@ export class TranscriptUI {
                     console.error(`Fehler bei Datei ${file.name}:`, error);
                     this.updateFileProgressByFile(file, 100, 'Fehlgeschlagen', 'error');
                     allFilesSuccessful = false;
+                    break; // Abort processing for this group if any chunk fails
                 }
-            });
-
-            await Promise.all(filePromises);
+            }
 
             // Merge and save all files in the group if all were successful
-            const allPopulated = files.every((_, idx) => fileResults[idx] !== undefined);
-            if (allFilesSuccessful && allPopulated) {
+            if (allFilesSuccessful && fileResults.length === files.length) {
                 let combinedSegments = [];
                 let combinedWords = [];
                 let accumulatedDuration = 0;
@@ -2149,7 +2408,7 @@ export class TranscriptUI {
             
             let statusText = 'Wird verarbeitet...';
             if (job.status === 'preprocessing') statusText = 'Vorbereitung (Audio Konvertierung)...';
-            if (job.status === 'transcribing' || job.status === 'optimizing') statusText = 'Audio wird transkribiert...';
+            if (job.status === 'transcribing') statusText = 'Audio wird transkribiert...';
 
             if (!jobEl) {
                 jobEl = document.createElement('div');
@@ -2228,17 +2487,12 @@ export class TranscriptUI {
                 } else if (statusData.status === 'completed') {
                     isCompleted = true;
                     resultData = statusData.result;
-                } else if (statusData.status === 'transcribing' || statusData.status === 'optimizing') {
+                } else if (statusData.status === 'transcribing') {
                     let msg = 'Transcription Startet...';
                     if (statusData.manifest && statusData.manifest.progress) {
                         const current = statusData.manifest.progress.current_chunk || 0;
                         const total = statusData.manifest.progress.total_chunks || 1;
-                        const phase = statusData.manifest.progress.phase || 'transcribing';
-                        if (phase === 'optimizing') {
-                            msg = 'Sprecher per KI optimieren...';
-                        } else {
-                            msg = `Chunk ${current.toString().padStart(3, '0')} wird transkribiert...`;
-                        }
+                        msg = `Chunk ${current.toString().padStart(3, '0')} wird transkribiert...`;
                     }
                     if (statusTextEl) statusTextEl.textContent = msg;
                 } else if (statusData.status === 'preprocessed') {
