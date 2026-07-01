@@ -2468,12 +2468,17 @@
 
 /* Transcript Workspace & Tabs Layout */
 .transcript-workspace-ui {
-    display: flex;
+    display: none;
     flex-direction: column;
-    height: 100%;
     width: 100%;
     overflow-x: auto;
     overflow-y: hidden;
+}
+
+.transcript-workspace-ui:not(.hidden) {
+    display: flex;
+    flex: 1;
+    min-height: 0;
 }
 
 .transcript-workspace-section {
@@ -2769,6 +2774,7 @@
     flex-grow: 1;
     width: 100%;
 }
+
 
 /* Center drop zone vertically initially */
 #transcript-file-ui .transcript-section {
