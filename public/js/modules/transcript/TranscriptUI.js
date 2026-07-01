@@ -213,7 +213,6 @@ export class TranscriptUI {
     }
 
     switchTranscriptView(viewId) {
-        console.log('switchTranscriptView called with:', viewId);
         if (viewId !== 'live' && this.app.state.liveTranscriptMaximized) {
             this.app.state.liveTranscriptMaximized = false;
             document.body.classList.remove('live-transcript-maximized-active');
@@ -265,9 +264,7 @@ export class TranscriptUI {
                 this.renderMultiFileSelection();
                 break;
             case 'live':
-                console.log('Attempting to show transcript-live-ui');
                 this.showIfExist('transcript-live-ui');
-                console.log('Attempting to show setLiveTab');
                 this.setLiveTab('record');
                 this.applyLiveTranscriptAppearance();
                 if (this.app.liveTranscriptionManager) {
